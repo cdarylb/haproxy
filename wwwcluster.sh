@@ -17,7 +17,7 @@ Script to manage servers in HaProxy - Read README.TXT
 Copyright (c) Cyril Beaufrere <cyril.beaufrere@gmail.com>
 Version: 1.1
 Last Modified: 10 Janvier 2013
-License: This software can be used for free unless I meet you, then you owe me lunch.
+License : This software can be used for free unless I meet you, then you owe me lunch.
 
 Usage: wwwcluster.sh -d| -e| -a| -h| -m| -s [webserver]
 
