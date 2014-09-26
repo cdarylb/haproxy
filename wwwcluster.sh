@@ -4,7 +4,7 @@
 
 WEBSERVER="$2"
 SOCQUETTE="socat unix-connect:/var/run/haproxy.stat stdio"
-SERVERS="web1 web2 web3 web4"
+SERVERS="grep web /etc/hosts | awk '{print $3}' ORS=' '; echo"
 BACKEND="www.famihero.com"
 VERT="\\033[1;32m"
 ROUGE="\\033[1;31m"

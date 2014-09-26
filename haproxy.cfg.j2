@@ -1,0 +1,175 @@
+global
+    user haproxy
+    group haproxy
+    log /dev/log local0 info
+    log /dev/log local0 notice
+    stats socket /var/run/haproxy.stat  level admin
+    maxconn 20000
+    tune.ssl.default-dh-param 2048
+    daemon
+
+defaults
+    mode http
+    log global
+    option log-health-checks
+    option log-separate-errors
+    option tcp-smart-accept
+    option tcp-smart-connect
+
+    timeout http-request 10s
+    timeout queue 10s
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+    timeout http-keep-alive 5s
+    timeout check 5s
+    retries 3
+
+{% if lb_gui_password %}
+listen admin
+    bind {{ lb_bind_ip }}:8889
+    option dontlog-normal
+    stats uri /stats
+    stats realm STATS_WEB
+    stats auth cyril:{{ lb_gui_password }}
+    stats refresh 5s
+{% endif %}
+
+frontend http-in
+
+    errorfile 408 /dev/null # test cyril
+
+    bind {{ lb_bind_ip }}:80
+    bind {{ lb_bind_ip }}:443 ssl crt /etc/haproxy/cert.pem ciphers RC4:HIGH:!aNULL:!MD5
+    http-request set-header X-Forwarded-Proto %[ssl_fc]
+    option forwardfor header X-Real-IP
+    option httplog
+
+{% if lb_restrict_ips %}
+    acl whitelist src {{ lb_restrict_ips|join(' ') }}
+    tcp-request connection reject if !whitelist
+{% endif %}
+
+{% if lb_badcountry_host %}
+    acl acl_badcountry src -f /etc/haproxy/geo/IN.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/DZ.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/MA.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/CN.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/TN.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/GA.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/CI.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/NG.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/CM.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/RO.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/UA.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/CZ.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/PL.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/HU.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/BG.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/BF.subnets
+    acl acl_badcountry src -f /etc/haproxy/geo/BJ.subnets
+    use_backend badcountry if acl_badcountry
+{% endif %}
+    acl meteor_app path_beg /meteor/
+    use_backend meteor if meteor_app
+
+    acl modo path_beg /admin
+    use_backend modo if modo
+
+    acl is_websocket hdr(Upgrade) -i WebSocket
+    acl websocket_app_bo hdr_beg(host) {{ lb_modo_subdomain }}.
+
+    use_backend websocket-bo if websocket_app_bo
+
+    default_backend front
+
+backend front
+    balance roundrobin
+    cookie fami insert nocache domain .famihero.com
+
+{% if lb_check_head %}
+    option httpchk HEAD /haproxytest.txt HTTP/1.0
+{% endif %}
+
+{% for host in groups['webservers'] %}
+{% if host not in groups['boservers'] or groups['webservers']|length == 1 %}
+{% if hostvars[host].private_network_interface_name is defined %}
+{% if host == inventory_hostname %}
+	server {{ host }} 127.0.0.1:8080 cookie {{ host }} check inter 2000 fall 2
+{% else %}
+    server {{ host }} {{ hostvars[host]['ansible_' + hostvars[host].private_network_interface_name].ipv4.address }}:80 cookie {{ host }} check inter 2000 fall 2
+{% endif %}
+{% else %}
+	server {{ groups['webservers'][0] }} 127.0.0.1:8080 cookie {{ groups['webservers'][0] }} check inter 2000 fall 2
+{% endif %}
+{% endif %}
+{% endfor %}
+
+{% if lb_backup_host %}
+    server maintenance {{ hostvars[lb_backup_host]['ansible_' + hostvars[lb_backup_host].private_network_interface_name].ipv4.address }}:8086 backup
+{% endif %}
+
+    option redispatch
+    option http-server-close
+    option abortonclose
+
+backend modo
+    balance roundrobin
+    cookie fami insert nocache domain .famihero.com
+{% if lb_check_head %}
+    option httpchk HEAD /haproxy.txt HTTP/1.0
+{% endif %}
+
+{% for host in groups['boservers'] %}
+{% if hostvars[host].private_network_interface_name is defined %}
+{% if host == inventory_hostname %}
+	server {{ host }} 127.0.0.1:8080 cookie {{ host }} check inter 2000 fall 2
+{% else %}
+    server {{ host }} {{ hostvars[host]['ansible_' + hostvars[host].private_network_interface_name].ipv4.address }}:80 cookie {{ host }} check inter 2000 fall 2
+{% endif %}
+{% else %}
+	server {{ groups['boservers'][0] }} 127.0.0.1:8080 cookie {{ groups['boservers'][0] }} check inter 2000 fall 2
+{% endif %}
+{% endfor %}
+
+{% if lb_backup_host %}
+    server maintenance {{ hostvars[lb_backup_host]['ansible_' + hostvars[lb_backup_host].private_network_interface_name].ipv4.address }}:8086 backup
+{% endif %}
+
+    option redispatch
+    option http-server-close
+    option abortonclose
+
+backend meteor
+    reqrep ^([^\ :]*)\ /meteor/(.*)     \1\ /\2
+{% if inventory_hostname in groups['meteorservers'] %}
+    server meteor 127.0.0.1:8672 check observe layer7
+{% else %}
+{% for host in groups['meteorservers'] %}
+    server {{ host }} {{ hostvars[host]['ansible_' + hostvars[host].private_network_interface_name].ipv4.address }}:4670 check observe layer7
+{% endfor %}
+{% endif %}
+    option abortonclose
+    option http-server-close
+    option redispatch
+
+backend websocket-bo
+{% if inventory_hostname in groups['modoservers'] %}
+    server node 127.0.0.1:{{ lb_modo_port }} check
+{% else %}
+{% for host in groups['modoservers'] %}
+    server {{ host }} {{ hostvars[host]['ansible_' + hostvars[host].private_network_interface_name].ipv4.address }}:{{ lb_modo_port }} check
+{% endfor %}
+{% endif %}
+    timeout tunnel 3600s
+    option forwardfor
+    option http-server-close
+    option forceclose
+    no option httpclose
+
+{% if lb_badcountry_host %}
+backend badcountry
+    mode http
+    server badcountry {{ hostvars[lb_badcountry_host]['ansible_' + hostvars[lb_badcountry_host].private_network_interface_name].ipv4.address }}:8087
+{% endif %}
+
