@@ -1,7 +1,7 @@
 wwwcluster.sh
 ==========
 
-Another HAProxy control tool
+Another haproxy control and management tool
 
 About
 --------
